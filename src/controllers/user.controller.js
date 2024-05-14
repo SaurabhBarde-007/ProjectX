@@ -13,6 +13,26 @@ const userSchema = zod.object({
   password: zod.string(),
 });
 
+const generateAccessAndRefreshTokens = async(userId)=>{
+    try {
+      const user = await User.findById(userId);
+      const accessToken = user.generateAccessToken();
+      const refreshToken = user.generateRefreshToken();
+
+      user.refreshToken = refreshToken;
+      await user.save({ validateBeforeSave: false });
+      //kyu ki user mongodb se bankar aya hai isliye hamare pass save method yaha par bhi availabel hai
+      //jab ham save kar rahe honge na tab yaha par mongoose ke model kickin ho jate hai for example yeh password vala field bhi kickin hojayega
+      //ki yeh jab bhi save karoge tab password lagega aisi situation mai yaha pe yek aur parameter pass karte i.e validateBeforeSave 
+      //matlab validation kuch maat lagao seedha jake save kardo mujhe pata hai mai kya kar rha hu
+
+      return {accessToken , refreshToken}
+
+    } catch (error) {
+      throw new ApiError(500,"Something went wrong while generating refresh and access token ")
+    }
+}
+
 const registerUser = asyncHandler(async (req, res) => {
   //* get user details from frontend
   //* validation - like checking either required fields are empty , email is in correct format or not
@@ -98,4 +118,98 @@ const registerUser = asyncHandler(async (req, res) => {
     .json(new ApiResponse(200, createdUser, "user registered successfully"));
 });
 
-export { registerUser };
+const loginUser = asyncHandler(async(req,res)=>{
+    //* req body =>  user data
+    //* username or email for login 
+    //* find the user
+    //* password check
+    //* access and refresh token
+    //* send cookie
+
+    const userData= userSchema.safeParse(req.body);
+
+    if(!userData.data.username || !userData.data.email){
+      throw new ApiError(400,"username or email is required")
+    }
+
+    const user = await User.findOne({
+      $or:[{username:userData.data.username},{email:userData.data.email}]
+      //* $or is mongodb operator
+      //* $or ke andar haam array pass kar sakte hai aur uss array ke andar objects pass kar sakte hai
+      //* abb yeh $or operator find karega yek value ko yah toh voh username ke base pe mil jaye ya fir email ke basis par mil jaye
+    })
+
+    if(!user){
+      throw new ApiError(404,"User does not exists");
+    }
+
+    const isPasswordValid = await user.isPasswordCorrect(userData.data.password);
+
+    if (!isPasswordValid) {
+      throw new ApiError(404, "Invalid User Credentials");
+    }
+    //* yaha pe jo method access karna hai yeh "User" nahi karne hai 
+    //* "User" mongoose ka object hai toh mongoose ke through jo methods availabel hai jaise ki findOne , updateOne yeh apke mongoDB ke jo mongoose uske through availabel hai
+    //* jo methods hamne banaye hai like isPasswordCorrect , generateTokens yeh sab hamare "user" mai availabel hai jo ki hamne database se vapis liya hai, uska instance liya hai 
+
+    const {accessToken,refreshToken} = await generateAccessAndRefreshTokens(user._id);
+
+    // user.save({validateBeforeSave:false});
+    const loggedInUser = await User.findById(user._id).select("-password -refreshToken");
+
+    //sending cookies 
+    // cookies jab bhi haam bhejte tab hame kuch options design karne hote hai
+
+    const options = {
+      httpOnly : true,
+      secure : true
+    }
+
+    // cookies by default usko koi bhi modify kar sakta hai frontend pe but httpOnly aur secure true karte hai
+    //tab yeh cookies sirf server se modifiable hoti hai haam isko frontend se modify nahi kar sakte isko haam dekh sakte hai but modify nahi kar sakte
+
+    return res.status(200)
+    .cookie("accessToken",accessToken,options)
+    .cookie("refreshToken",refreshToken,options)
+    .json(
+      new ApiResponse(
+        200,
+        {
+          user: loggedInUser , accessToken , refreshToken
+        },
+        "User Logged in Successfully"
+      )
+    )
+
+})
+
+const logoutUser = asyncHandler(async(req,res)=>{
+    await User.findByIdAndUpdate(
+      req.user._id,
+      {
+        $set:{
+          refreshToken: undefined
+        }
+      },
+      {
+        new:true  //* toh return mai jo response milega usme new updated value milegi kyuki agar old value milegi toh usme refreshToken bhi aa jayega
+      }
+    )
+
+    const options = {
+      httpOnly : true,
+      secure:true
+    }
+
+    return res
+    .status(200)
+    .clearCookie("accessToken",options)
+    .clearCookie("refreshToken",options)
+    .json(new ApiResponse(200,{},"User Logged out successfully"))
+})
+
+export { 
+  registerUser,
+  loginUser,
+  logoutUser
+ };
