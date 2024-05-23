@@ -5,6 +5,7 @@ import { User } from "../models/user.model.js";
 import { uploadOnCloudinary } from "../utils/cloudinary.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import jwt from "jsonwebtoken";
+import mongoose from "mongoose";
 
 const userSchema = zod.object({
   fullname: zod.string(),
@@ -401,7 +402,7 @@ const getUserChannelProfile = asyncHandler(async(req,res)=>{
     },
 
     {
-      $lookup: {
+      $lookup: { // it is used to join the documents
         from: "subscriptions",
         localField: "_id",
         foreignField: "channel",
@@ -419,7 +420,9 @@ const getUserChannelProfile = asyncHandler(async(req,res)=>{
     },
 
     {
-      $addFields: {
+      $addFields: { 
+         // $addfields operator : yeh kya karta hai ki jitne bhi hamare pass values inko ko toh rakhega hi but additional fields add kar dega 
+         // taki yeh hi object mai haam saara object bhej de 
         subscribersCount: {
           $size: "$subscribers",
         },
@@ -433,14 +436,28 @@ const getUserChannelProfile = asyncHandler(async(req,res)=>{
           $cond: {
             // logic behind is this that we try to find our name is present or not in the documents (array) recieved in the subscribersCount
             if: { $in: [req.user?._id, "$subscribers.subscriber"] },
-            then:true,
-            else:false
+            then: true,
+            else: false,
           },
         },
       },
     },
 
+    {
+      $project: {
+        //$project projection deta hai ki mai saari values ko nahi yekdum project karunga mai kuch selected cheej dunga
+        fullname: 1,
+        username: 1,
+        subscribersCount: 1,
+        channelsSubscribedToCount: 1,
+        isSubscribed:1,
+        avatar:1,
+        coverImage:1,
+        email:1
+      },
+    },
   ]);
+
 
   if (!channel?.length) {
     throw new ApiError(404,"channel does not exsists")
@@ -451,6 +468,58 @@ const getUserChannelProfile = asyncHandler(async(req,res)=>{
   .json(
     new ApiResponse(200,channel[0] , "user channel fetched successfully")
   )
+})
+
+const getWatchHistory = asyncHandler(async(req,res)=>{
+    const user = await User.aggregate([
+      {
+        _id: new mongoose.Types.ObjectId(req.user._id),
+      },
+
+      {
+        $lookup: {
+          from: "videos",
+          localField: "watchHistory",
+          foreignField: "_id",
+          as: "watchHistory",
+          pipeline: [
+            {
+              $lookup: {
+                from: "users",
+                localField: "owner",
+                foreignField: "_id",
+                as: "owner",
+                pipeline: [
+                  {
+                    $project: {
+                      fullname: 1,
+                      username: 1,
+                      avatar: 1,
+                    },
+                  },
+                ],
+              },
+            },
+
+            {
+              $addFields: {
+                owner: {
+                  $first: "$owner",
+                },
+              },
+            },
+          ],
+        },
+      },
+    ]);
+
+    return res
+    .status(200)
+    .json(new ApiResponse(
+      200,
+      user[0].watchHistory,
+      "watch history fetched successfully"
+    ))
 })
 
 export {
@@ -464,4 +533,5 @@ export {
   updateUserAvatar,
   updateUserCoverImage,
   getUserChannelProfile,
+  getWatchHistory,
 };
